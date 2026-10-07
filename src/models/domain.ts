@@ -4,6 +4,9 @@ export type ThreatStatus = 'open' | 'mitigating' | 'mitigated' | 'accepted'
 export type ControlStatus = 'effective' | 'degraded' | 'failed' | 'planned'
 export type ActorRole = 'development' | 'security' | 'business'
 export type DecisionType = 'accept' | 'degrade' | 'evidence_required' | 'approved' | 'rejected'
+export type DependencyStatus = 'active' | 'review_due' | 'retired' | 'pending_verification'
+export type DataFlowStatus = 'active' | 'invalidated'
+export type MitigationStatus = 'todo' | 'reschedule' | 'in_progress' | 'verifying' | 'done'
 
 export interface SystemBoundary {
   id: string
@@ -38,7 +41,9 @@ export interface ExternalDependency {
   purpose: string
   dataClass: 'public' | 'internal' | 'confidential' | 'restricted'
   owner: string
-  status: 'active' | 'review_due' | 'retired'
+  status: DependencyStatus
+  revision: number
+  updatedAt: string
 }
 
 export interface DataFlow {
@@ -50,6 +55,8 @@ export interface DataFlow {
   dataClass: 'public' | 'internal' | 'confidential' | 'restricted'
   crossesTrustBoundary: boolean
   description: string
+  externalDependencyIds: string[]
+  status: DataFlowStatus
 }
 
 export interface ControlEvidence {
@@ -120,11 +127,13 @@ export interface MitigationTask {
   title: string
   owner: string
   dueAt: string
-  status: 'todo' | 'in_progress' | 'verifying' | 'done'
+  status: MitigationStatus
   action: 'restrict' | 'monitor' | 'encrypt' | 'isolate' | 'allow_with_condition'
   detail: string
   evidenceIds: string[]
   conflictGroup?: string
+  completedAt?: string
+  basisRevision?: number
 }
 
 export interface ReviewDecision {
@@ -163,6 +172,18 @@ export interface AuditEvent {
   detail: string
 }
 
+export interface DependencyConflict {
+  id: string
+  dependencyId: string
+  dependencyName: string
+  targetStatus: DependencyStatus
+  reason: string
+  baseRevision: number
+  currentRevision: number
+  actor: string
+  createdAt: string
+}
+
 export interface ThreatModelState {
   boundary: SystemBoundary
   zones: TrustZone[]
@@ -178,12 +199,20 @@ export interface ThreatModelState {
   decisions: ReviewDecision[]
   versions: VersionSnapshot[]
   audit: AuditEvent[]
+  dependencyConflicts: DependencyConflict[]
   currentRevision: number
 }
 
 export interface ValidationIssue {
   id: string
-  kind: 'uncovered_component' | 'control_failed' | 'risk_acceptance_expired' | 'mitigation_conflict' | 'missing_evidence'
+  kind:
+    | 'uncovered_component'
+    | 'control_failed'
+    | 'risk_acceptance_expired'
+    | 'mitigation_conflict'
+    | 'missing_evidence'
+    | 'dependency_unverified'
+    | 'flow_invalidated'
   severity: Severity
   title: string
   detail: string

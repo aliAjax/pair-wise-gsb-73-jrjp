@@ -60,6 +60,15 @@ const currentDecisions = computed(() =>
       )
     : [],
 )
+const unverifiedDependencies = computed(() =>
+  selectedThreat.value
+    ? store.data.dependencies.filter(
+        (dependency) =>
+          selectedThreat.value!.externalDependencyIds.includes(dependency.id) &&
+          dependency.status === 'pending_verification',
+      )
+    : [],
+)
 
 const statusForRole = (threat: Threat, role: ActorRole): DecisionType | 'pending' =>
   decisionsForThreat(store.data.decisions, threat.id, threat.revision).find(
@@ -85,7 +94,7 @@ const submitDecision = (): void => {
     toast.add({ severity: 'error', summary: '校验失败', detail: '会签意见不能为空', life: 3000 })
     return
   }
-  store.submitDecision(
+  const result = store.submitDecision(
     selectedThreat.value.id,
     form.role,
     form.decision,
@@ -93,6 +102,15 @@ const submitDecision = (): void => {
     form.comment,
   )
   decisionVisible.value = false
+  if (result.blockedBy.length > 0) {
+    toast.add({
+      severity: 'warn',
+      summary: '会签暂缓批准',
+      detail: `外部依赖待核：${result.blockedBy.join('、')}，补齐前不能批准会签`,
+      life: 4500,
+    })
+    return
+  }
   toast.add({ severity: 'success', summary: '会签意见已提交', detail: '审核状态已重新计算', life: 2500 })
 }
 
@@ -169,6 +187,13 @@ const decisionLabel = (decision: DecisionType | 'pending'): string =>
             <StatusTag :value="selectedThreat.reviewStatus" kind="review" />
           </div>
           <p class="decision-description">{{ selectedThreat.description }}</p>
+          <div v-if="unverifiedDependencies.length > 0" class="block-banner">
+            <i class="pi pi-exclamation-circle"></i>
+            <span>
+              关联外部依赖 {{ unverifiedDependencies.map((item) => item.name).join('、') }}
+              供应商状态待核，补齐前不能批准会签。
+            </span>
+          </div>
           <Button label="提交会签意见" icon="pi pi-pencil" @click="openDecision" />
 
           <section class="decision-history">
@@ -343,6 +368,26 @@ const decisionLabel = (decision: DecisionType | 'pending'): string =>
   color: #59657a;
   font-size: 13px;
   line-height: 1.65;
+}
+
+.block-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 0 0 16px;
+  padding: 11px 12px;
+  border: 1px solid #f2c78f;
+  border-left: 4px solid #d97706;
+  border-radius: 6px;
+  background: #fffaf0;
+  color: #7b5d2c;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.block-banner > i {
+  margin-top: 2px;
+  color: #b45309;
 }
 
 .decision-history {

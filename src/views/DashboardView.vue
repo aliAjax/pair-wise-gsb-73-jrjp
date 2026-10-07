@@ -9,6 +9,7 @@ import ProgressBar from 'primevue/progressbar'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import { useDashboardGraphql } from '@/composables/useDashboardGraphql'
+import type { ValidationIssue } from '@/models/domain'
 import { riskLevel, riskScore } from '@/services/selectors'
 import { useThreatModelStore } from '@/stores/threatModel'
 
@@ -26,6 +27,12 @@ const topRisks = computed(() =>
 
 const componentName = (id: string): string =>
   store.data.components.find((component) => component.id === id)?.name ?? id
+
+const issueLink = (kind: ValidationIssue['kind']): string => {
+  if (kind === 'mitigation_conflict') return '/mitigations'
+  if (kind === 'dependency_unverified' || kind === 'flow_invalidated') return '/architecture'
+  return '/risks'
+}
 </script>
 
 <template>
@@ -80,10 +87,7 @@ const componentName = (id: string): string =>
               <strong>{{ issue.title }}</strong>
               <p>{{ issue.detail }}</p>
             </div>
-            <RouterLink
-              :to="issue.kind === 'mitigation_conflict' ? '/mitigations' : '/risks'"
-              class="row-link"
-            >
+            <RouterLink :to="issueLink(issue.kind)" class="row-link">
               处理
             </RouterLink>
           </article>

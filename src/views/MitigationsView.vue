@@ -29,6 +29,7 @@ const actionOptions = [
 ]
 const statusOptions = [
   { label: '待处理', value: 'todo' },
+  { label: '待重排', value: 'reschedule' },
   { label: '进行中', value: 'in_progress' },
   { label: '验证中', value: 'verifying' },
   { label: '已完成', value: 'done' },
@@ -100,6 +101,7 @@ const saveTask = (): void => {
 }
 
 const nextStatus = (status: MitigationTask['status']): MitigationTask['status'] => {
+  if (status === 'reschedule') return 'in_progress'
   const sequence: MitigationTask['status'][] = ['todo', 'in_progress', 'verifying', 'done']
   return sequence[Math.min(sequence.indexOf(status) + 1, sequence.length - 1)]
 }
@@ -150,7 +152,19 @@ const nextStatus = (status: MitigationTask['status']): MitigationTask['status'] 
             <strong>{{ threatLabel(data.threatId) }}</strong>
           </template>
         </Column>
-        <Column field="title" header="缓解措施" style="min-width: 230px" />
+        <Column field="title" header="缓解措施" style="min-width: 230px">
+          <template #body="{ data }">
+            <div class="task-title">
+              <span>{{ data.title }}</span>
+              <small v-if="data.status === 'done' && data.basisRevision" class="basis-note">
+                依据 v1.{{ data.basisRevision }} 完成 · 原依据保留
+              </small>
+              <small v-else-if="data.status === 'reschedule'" class="reschedule-note">
+                依赖状态变更，待重新排期
+              </small>
+            </div>
+          </template>
+        </Column>
         <Column header="动作" style="width: 125px">
           <template #body="{ data }">
             {{ actionOptions.find((item) => item.value === data.action)?.label }}
@@ -294,6 +308,21 @@ const nextStatus = (status: MitigationTask['status']): MitigationTask['status'] 
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.task-title {
+  display: grid;
+  gap: 4px;
+}
+
+.basis-note {
+  color: #2e684f;
+  font-size: 11px;
+}
+
+.reschedule-note {
+  color: #a05a00;
+  font-size: 11px;
 }
 
 .conflict-label {

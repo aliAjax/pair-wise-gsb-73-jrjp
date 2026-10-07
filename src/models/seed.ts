@@ -277,6 +277,8 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'confidential',
       owner: '增长工程组',
       status: 'active',
+      revision: 1,
+      updatedAt: '2026-09-20T16:40:00+08:00',
     },
     {
       id: 'dep-02',
@@ -286,6 +288,8 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'restricted',
       owner: '数据平台组',
       status: 'review_due',
+      revision: 1,
+      updatedAt: '2026-09-20T16:40:00+08:00',
     },
     {
       id: 'dep-03',
@@ -295,6 +299,19 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'confidential',
       owner: '生态集成组',
       status: 'active',
+      revision: 1,
+      updatedAt: '2026-09-20T16:40:00+08:00',
+    },
+    {
+      id: 'dep-04',
+      name: '历史告警短信网关',
+      vendor: '',
+      purpose: '早期告警短信通道，供应商信息自旧系统迁入，待补齐确认。',
+      dataClass: 'internal',
+      owner: '增长工程组',
+      status: 'pending_verification',
+      revision: 1,
+      updatedAt: '2026-09-01T00:00:00+08:00',
     },
   ],
   flows: [
@@ -307,6 +324,8 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'internal',
       crossesTrustBoundary: true,
       description: '携带短期访问令牌进入业务隔离区。',
+      externalDependencyIds: [],
+      status: 'active',
     },
     {
       id: 'flow-02',
@@ -317,6 +336,8 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'confidential',
       crossesTrustBoundary: true,
       description: '转发已校验的业务请求与服务身份。',
+      externalDependencyIds: [],
+      status: 'active',
     },
     {
       id: 'flow-03',
@@ -327,6 +348,8 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'restricted',
       crossesTrustBoundary: true,
       description: '读取客户标签并写入活动执行结果。',
+      externalDependencyIds: [],
+      status: 'active',
     },
     {
       id: 'flow-04',
@@ -337,6 +360,8 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'restricted',
       crossesTrustBoundary: true,
       description: '经网关生成受限下载链接。',
+      externalDependencyIds: ['dep-02'],
+      status: 'active',
     },
     {
       id: 'flow-05',
@@ -347,6 +372,8 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'confidential',
       crossesTrustBoundary: true,
       description: '同步伙伴活动归因，使用独立签名密钥。',
+      externalDependencyIds: ['dep-03'],
+      status: 'active',
     },
   ],
   controls: [
@@ -437,7 +464,7 @@ export const createSeedState = (): ThreatModelState => ({
       status: 'open',
       componentIds: ['cmp-03', 'cmp-04', 'cmp-05'],
       flowIds: ['flow-03', 'flow-04'],
-      externalDependencyIds: ['dep-02'],
+      externalDependencyIds: ['dep-02', 'dep-04'],
       attackPathIds: ['path-03'],
       controlIds: ['ctl-03', 'ctl-04'],
       riskIds: ['risk-03'],
@@ -515,5 +542,6 @@ export const createSeedState = (): ThreatModelState => ({
   decisions,
   versions: baselineVersions,
   audit,
+  dependencyConflicts: [],
   currentRevision: 2,
 })

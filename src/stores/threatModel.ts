@@ -4,11 +4,26 @@ import type {
   ActorRole,
   AuditEvent,
   DecisionType,
+  DependencyConflict,
+  DependencyStatus,
+  ExternalDependency,
   Threat,
   ThreatModelState,
   VersionSnapshot,
 } from '@/models/domain'
-import { createId, loadState, resetState, saveState } from '@/services/repository'
+import {
+  commitBatch,
+  createId,
+  hasPendingBatch,
+  loadState,
+  resetState,
+  saveState,
+} from '@/services/repository'
+import {
+  buildDependencyStatusBatch,
+  dependencyTransitionLabel,
+  type DependencyStatusChange,
+} from '@/services/lifecycle'
 import {
   dashboardMetrics,
   decisionsForThreat,
@@ -36,12 +51,14 @@ interface IdentifiedEntity {
 export const useThreatModelStore = defineStore('threat-model', () => {
   const data = ref<ThreatModelState>(loadState())
   const lastSavedAt = ref(new Date().toISOString())
+  const pendingRecovery = ref(false)
 
   const metrics = computed(() => dashboardMetrics(data.value))
   const issues = computed(() => getValidationIssues(data.value))
   const pendingReviews = computed(() =>
     data.value.threats.filter((threat) => threat.reviewStatus === 'in_review'),
   )
+  const dependencyConflicts = computed(() => data.value.dependencyConflicts)
 
   const persist = (): void => {
     saveState(data.value)
@@ -69,6 +86,14 @@ export const useThreatModelStore = defineStore('threat-model', () => {
   const saveEntity = (collection: CollectionKey, item: IdentifiedEntity): void => {
     const target = data.value[collection] as unknown as IdentifiedEntity[]
     const index = target.findIndex((entry) => entry.id === item.id)
+    if (collection === 'dependencies') {
+      // 依赖的任何字段变更都推进修订号，使其他窗口的停服/续期草稿能检测到冲突
+      const dependency = item as ExternalDependency
+      const previous =
+        index >= 0 ? (target[index] as unknown as ExternalDependency) : undefined
+      dependency.revision = (previous?.revision ?? 0) + 1
+      dependency.updatedAt = new Date().toISOString()
+    }
     if (index >= 0) {
       target[index] = item
     } else {
@@ -142,9 +167,9 @@ export const useThreatModelStore = defineStore('threat-model', () => {
     decision: DecisionType,
     actor: string,
     comment: string,
-  ): void => {
+  ): { blockedBy: string[] } => {
     const threat = data.value.threats.find((item) => item.id === threatId)
-    if (!threat) return
+    if (!threat) return { blockedBy: [] }
     data.value.decisions = data.value.decisions.filter(
       (item) => !(item.threatId === threatId && item.role === role && item.revision === threat.revision),
     )
@@ -164,13 +189,25 @@ export const useThreatModelStore = defineStore('threat-model', () => {
     const allSubmitted = requiredRoles.every((requiredRole) =>
       currentDecisions.some((item) => item.role === requiredRole),
     )
+    // 待核依赖未补齐前，即使三方全部通过也不能批准会签
+    const unverifiedDependencies = data.value.dependencies.filter(
+      (dependency) =>
+        threat.externalDependencyIds.includes(dependency.id) &&
+        dependency.status === 'pending_verification',
+    )
+    let blockedBy: string[] = []
     if (currentDecisions.some((item) => item.decision === 'rejected')) {
       threat.reviewStatus = 'rejected'
     } else if (
       allSubmitted &&
       currentDecisions.every((item) => item.decision === 'approved')
     ) {
-      threat.reviewStatus = 'approved'
+      if (unverifiedDependencies.length > 0) {
+        threat.reviewStatus = 'in_review'
+        blockedBy = unverifiedDependencies.map((dependency) => dependency.name)
+      } else {
+        threat.reviewStatus = 'approved'
+      }
     } else {
       threat.reviewStatus = 'in_review'
     }
@@ -186,9 +223,12 @@ export const useThreatModelStore = defineStore('threat-model', () => {
       'threat',
       threatId,
       decisionLabel[decision],
-      `${actor}（${role}）提交会签意见`,
+      blockedBy.length > 0
+        ? `${actor}（${role}）提交会签意见；外部依赖待核（${blockedBy.join('、')}），补齐前不能批准会签`
+        : `${actor}（${role}）提交会签意见`,
     )
     persist()
+    return { blockedBy }
   }
 
   const updateMitigationStatus = (
@@ -197,9 +237,150 @@ export const useThreatModelStore = defineStore('threat-model', () => {
   ): void => {
     const task = data.value.mitigations.find((item) => item.id === taskId)
     if (!task) return
+    if (status === 'done' && task.status !== 'done') {
+      // 完成时固化依据：后续依赖停服级联不会改动已完成任务，原依据保留
+      task.completedAt = new Date().toISOString()
+      task.basisRevision = data.value.currentRevision
+    }
     task.status = status
     appendAudit('mitigation', task.id, '更新状态', `${task.title} 更新为 ${status}`)
     persist()
+  }
+
+  /**
+   * 依赖状态变更（停服/续期/补齐确认）的统一入口。
+   * 基于 localStorage 中的最新状态做修订号校验：先到者生效并级联重算，
+   * 后到者保留草稿与冲突记录。批次写入失败时完整批次进入暂存区待恢复。
+   */
+  const changeDependencyStatus = (input: {
+    dependencyId: string
+    targetStatus: DependencyStatus
+    reason: string
+    baseRevision: number
+    patch?: DependencyStatusChange['patch']
+  }): { ok: boolean; conflict?: DependencyConflict; error?: string } => {
+    let persisted: ThreatModelState
+    try {
+      persisted = loadState()
+    } catch {
+      return { ok: false, error: '读取最新状态失败，请检查浏览器存储空间' }
+    }
+    const dependency = persisted.dependencies.find((item) => item.id === input.dependencyId)
+    if (!dependency) {
+      return { ok: false, error: '依赖不存在或已被删除' }
+    }
+
+    if (dependency.revision !== input.baseRevision) {
+      const conflict: DependencyConflict = {
+        id: createId('conf'),
+        dependencyId: dependency.id,
+        dependencyName: dependency.name,
+        targetStatus: input.targetStatus,
+        reason: input.reason,
+        baseRevision: input.baseRevision,
+        currentRevision: dependency.revision,
+        actor: '当前用户',
+        createdAt: new Date().toISOString(),
+      }
+      persisted.dependencyConflicts.unshift(conflict)
+      persisted.audit.unshift({
+        id: createId('aud'),
+        entityType: 'dependency',
+        entityId: dependency.id,
+        action: '提交冲突',
+        actor: '当前用户',
+        createdAt: new Date().toISOString(),
+        detail: `基于修订 v${input.baseRevision} 的${dependencyTransitionLabel(dependency.status, input.targetStatus)}提交与最新修订 v${dependency.revision} 冲突，先到者已生效，草稿与冲突已保留。`,
+      })
+      try {
+        saveState(persisted)
+      } catch {
+        return { ok: false, error: '冲突记录写入失败，请检查浏览器存储空间', conflict }
+      }
+      data.value = persisted
+      lastSavedAt.value = new Date().toISOString()
+      return { ok: false, conflict }
+    }
+
+    const batchId = createId('batch')
+    const batch = buildDependencyStatusBatch(
+      persisted,
+      {
+        dependencyId: input.dependencyId,
+        targetStatus: input.targetStatus,
+        reason: input.reason,
+        patch: input.patch,
+      },
+      batchId,
+      new Date().toISOString(),
+    )
+    if (!batch) {
+      return { ok: false, error: '依赖不存在或已被删除' }
+    }
+    try {
+      commitBatch(batchId, batch.auditIds, batch.state)
+    } catch {
+      pendingRecovery.value = hasPendingBatch()
+      return {
+        ok: false,
+        error: pendingRecovery.value
+          ? '写入失败，完整批次已暂存，可恢复重放（重放不新增审计）'
+          : '写入失败，批次未能暂存',
+      }
+    }
+    data.value = batch.state
+    lastSavedAt.value = new Date().toISOString()
+    return { ok: true }
+  }
+
+  const resolveDependencyConflict = (
+    conflictId: string,
+    resolution: 'retry' | 'discard',
+  ): { ok: boolean; conflict?: DependencyConflict; error?: string } => {
+    const conflict = data.value.dependencyConflicts.find((item) => item.id === conflictId)
+    if (!conflict) return { ok: false, error: '冲突记录不存在' }
+
+    if (resolution === 'discard') {
+      data.value.dependencyConflicts = data.value.dependencyConflicts.filter(
+        (item) => item.id !== conflictId,
+      )
+      appendAudit(
+        'dependency',
+        conflict.dependencyId,
+        '放弃冲突草稿',
+        `${conflict.dependencyName} 的${dependencyTransitionLabel(conflict.targetStatus, conflict.targetStatus)}草稿已放弃`,
+      )
+      persist()
+      return { ok: true }
+    }
+
+    const dependency = data.value.dependencies.find(
+      (item) => item.id === conflict.dependencyId,
+    )
+    if (!dependency) return { ok: false, error: '依赖不存在或已被删除' }
+    // 以最新修订号为基准重新提交同一草稿；再次冲突时会生成新的冲突记录
+    data.value.dependencyConflicts = data.value.dependencyConflicts.filter(
+      (item) => item.id !== conflictId,
+    )
+    persist()
+    return changeDependencyStatus({
+      dependencyId: dependency.id,
+      targetStatus: conflict.targetStatus,
+      reason: conflict.reason,
+      baseRevision: dependency.revision,
+    })
+  }
+
+  const recoverPendingBatch = (): boolean => {
+    if (!hasPendingBatch()) {
+      pendingRecovery.value = false
+      return false
+    }
+    // loadState 会整体重放暂存批次，批次内审计记录保持不变
+    data.value = loadState()
+    pendingRecovery.value = false
+    lastSavedAt.value = new Date().toISOString()
+    return true
   }
 
   const acceptRisk = (riskId: string, expiresAt: string, condition: string): void => {
@@ -222,6 +403,7 @@ export const useThreatModelStore = defineStore('threat-model', () => {
 
   const resetDemo = (): void => {
     data.value = resetState()
+    pendingRecovery.value = false
     lastSavedAt.value = new Date().toISOString()
   }
 
@@ -273,6 +455,8 @@ export const useThreatModelStore = defineStore('threat-model', () => {
     metrics,
     issues,
     pendingReviews,
+    pendingRecovery,
+    dependencyConflicts,
     saveEntity,
     removeEntity,
     updateBoundary,
@@ -280,6 +464,9 @@ export const useThreatModelStore = defineStore('threat-model', () => {
     createVersion,
     submitDecision,
     updateMitigationStatus,
+    changeDependencyStatus,
+    resolveDependencyConflict,
+    recoverPendingBatch,
     acceptRisk,
     closeRisk,
     resetDemo,
