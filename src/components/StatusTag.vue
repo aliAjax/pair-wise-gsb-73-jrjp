@@ -29,6 +29,13 @@ const labels: Record<string, string> = {
   in_progress: '进行中',
   verifying: '验证中',
   done: '已完成',
+  reschedule: '待重排',
+  active: '有效',
+  review_due: '待续期',
+  retired: '已停服',
+  invalid: '已失效',
+  pending: '待核',
+  confirmed: '已确认',
 }
 
 const palette = computed(() => {
@@ -36,10 +43,15 @@ const palette = computed(() => {
     critical: 'danger',
     failed: 'danger',
     rejected: 'danger',
+    retired: 'danger',
+    invalid: 'danger',
     high: 'warn',
     degraded: 'warn',
     in_review: 'warn',
     medium: 'warn',
+    review_due: 'warn',
+    reschedule: 'warn',
+    pending: 'warn',
     mitigating: 'info',
     in_progress: 'info',
     verifying: 'info',
@@ -49,6 +61,8 @@ const palette = computed(() => {
     mitigated: 'success',
     closed: 'success',
     done: 'success',
+    active: 'success',
+    confirmed: 'success',
   }
   return severity[props.value] ?? 'secondary'
 })

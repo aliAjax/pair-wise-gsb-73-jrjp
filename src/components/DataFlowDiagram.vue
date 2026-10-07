@@ -110,7 +110,8 @@ const componentName = (id: string): string =>
           :y1="nodePositions[flow.sourceId].y + nodeHeight / 2"
           :x2="nodePositions[flow.targetId].x"
           :y2="nodePositions[flow.targetId].y + nodeHeight / 2"
-          stroke="#6b7890"
+          :stroke="flow.status === 'invalid' ? '#c64b39' : '#6b7890'"
+          :stroke-dasharray="flow.status === 'invalid' ? '6 4' : undefined"
           stroke-width="1.4"
           marker-end="url(#arrowhead)"
           opacity="0.72"
@@ -132,10 +133,10 @@ const componentName = (id: string): string =>
             8
           "
           text-anchor="middle"
-          fill="#526077"
+          :fill="flow.status === 'invalid' ? '#b33627' : '#526077'"
           font-size="10"
         >
-          {{ flow.protocol }}
+          {{ flow.status === 'invalid' ? `${flow.protocol} · 已失效` : flow.protocol }}
         </text>
       </g>
       <line
@@ -168,12 +169,16 @@ const componentName = (id: string): string =>
     </svg>
     <div class="legend">
       <span><i class="legend-line"></i>数据流方向</span>
+      <span><i class="legend-invalid"></i>已失效数据流</span>
       <span><i class="legend-critical"></i>关键组件</span>
       <span>虚线：信任区边界</span>
     </div>
     <div class="flow-index">
       <div v-for="flow in store.data.flows" :key="flow.id" class="flow-index-item">
-        <strong>{{ flow.name }}</strong>
+        <strong>
+          {{ flow.name }}
+          <em v-if="flow.status === 'invalid'" class="invalid-flag">已失效</em>
+        </strong>
         <span>{{ componentName(flow.sourceId) }} → {{ componentName(flow.targetId) }}</span>
       </div>
     </div>
@@ -211,6 +216,19 @@ const componentName = (id: string): string =>
   width: 18px;
   height: 2px;
   background: #6b7890;
+}
+
+.legend-invalid {
+  width: 18px;
+  height: 0;
+  border-top: 2px dashed #c64b39;
+}
+
+.invalid-flag {
+  margin-left: 6px;
+  color: #b33627;
+  font-size: 10px;
+  font-style: normal;
 }
 
 .legend-critical {

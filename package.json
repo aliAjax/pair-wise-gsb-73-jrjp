@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "vue-tsc -b"
+    "typecheck": "vue-tsc -b",
+    "test:smoke": "esbuild scripts/smoke.ts --bundle --platform=node --format=esm --alias:@=./src --outfile=node_modules/.tmp/smoke.mjs && node node_modules/.tmp/smoke.mjs"
   },
   "dependencies": {
     "@apollo/client": "^3.12.7",

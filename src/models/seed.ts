@@ -277,6 +277,7 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'confidential',
       owner: '增长工程组',
       status: 'active',
+      vendorStatus: 'confirmed',
     },
     {
       id: 'dep-02',
@@ -286,6 +287,7 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'restricted',
       owner: '数据平台组',
       status: 'review_due',
+      vendorStatus: 'confirmed',
     },
     {
       id: 'dep-03',
@@ -295,6 +297,7 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'confidential',
       owner: '生态集成组',
       status: 'active',
+      vendorStatus: 'confirmed',
     },
   ],
   flows: [
@@ -307,6 +310,7 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'internal',
       crossesTrustBoundary: true,
       description: '携带短期访问令牌进入业务隔离区。',
+      status: 'active',
     },
     {
       id: 'flow-02',
@@ -317,6 +321,7 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'confidential',
       crossesTrustBoundary: true,
       description: '转发已校验的业务请求与服务身份。',
+      status: 'active',
     },
     {
       id: 'flow-03',
@@ -327,6 +332,7 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'restricted',
       crossesTrustBoundary: true,
       description: '读取客户标签并写入活动执行结果。',
+      status: 'active',
     },
     {
       id: 'flow-04',
@@ -337,6 +343,8 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'restricted',
       crossesTrustBoundary: true,
       description: '经网关生成受限下载链接。',
+      externalDependencyId: 'dep-02',
+      status: 'active',
     },
     {
       id: 'flow-05',
@@ -347,6 +355,8 @@ export const createSeedState = (): ThreatModelState => ({
       dataClass: 'confidential',
       crossesTrustBoundary: true,
       description: '同步伙伴活动归因，使用独立签名密钥。',
+      externalDependencyId: 'dep-03',
+      status: 'active',
     },
   ],
   controls: [
@@ -516,4 +526,5 @@ export const createSeedState = (): ThreatModelState => ({
   versions: baselineVersions,
   audit,
   currentRevision: 2,
+  stamp: 'seed',
 })

@@ -28,6 +28,7 @@ const actionOptions = [
   { label: '有条件放行', value: 'allow_with_condition' },
 ]
 const statusOptions = [
+  { label: '待重排', value: 'reschedule' },
   { label: '待处理', value: 'todo' },
   { label: '进行中', value: 'in_progress' },
   { label: '验证中', value: 'verifying' },
@@ -51,6 +52,10 @@ const filteredTasks = computed(() =>
   statusFilter.value
     ? store.data.mitigations.filter((task) => task.status === statusFilter.value)
     : store.data.mitigations,
+)
+
+const rescheduleCount = computed(
+  () => store.data.mitigations.filter((task) => task.status === 'reschedule').length,
 )
 
 const conflictTaskIds = computed(() => {
@@ -100,7 +105,13 @@ const saveTask = (): void => {
 }
 
 const nextStatus = (status: MitigationTask['status']): MitigationTask['status'] => {
-  const sequence: MitigationTask['status'][] = ['todo', 'in_progress', 'verifying', 'done']
+  const sequence: MitigationTask['status'][] = [
+    'reschedule',
+    'todo',
+    'in_progress',
+    'verifying',
+    'done',
+  ]
   return sequence[Math.min(sequence.indexOf(status) + 1, sequence.length - 1)]
 }
 </script>
@@ -118,6 +129,14 @@ const nextStatus = (status: MitigationTask['status']): MitigationTask['status'] 
       <div>
         <strong>检测到互斥缓解措施</strong>
         <span>同一威胁同时存在限制访问与有条件放行，请统一处置方向后再进入会签。</span>
+      </div>
+    </section>
+
+    <section v-if="rescheduleCount > 0" class="reschedule-banner">
+      <i class="pi pi-calendar-clock"></i>
+      <div>
+        <strong>{{ rescheduleCount }} 条未开始任务待重排</strong>
+        <span>外部依赖状态变更导致处置依据失效，请重新排期后再推进；已完成任务保留原完成依据。</span>
       </div>
     </section>
 
@@ -150,7 +169,16 @@ const nextStatus = (status: MitigationTask['status']): MitigationTask['status'] 
             <strong>{{ threatLabel(data.threatId) }}</strong>
           </template>
         </Column>
-        <Column field="title" header="缓解措施" style="min-width: 230px" />
+        <Column field="title" header="缓解措施" style="min-width: 230px">
+          <template #body="{ data }">
+            <div class="task-cell">
+              <span>{{ data.title }}</span>
+              <small v-if="data.status === 'done' && data.completedBasis" class="basis-note">
+                依据：{{ data.completedBasis }}
+              </small>
+            </div>
+          </template>
+        </Column>
         <Column header="动作" style="width: 125px">
           <template #body="{ data }">
             {{ actionOptions.find((item) => item.value === data.action)?.label }}
@@ -288,6 +316,42 @@ const nextStatus = (status: MitigationTask['status']): MitigationTask['status'] 
 .conflict-banner span {
   color: #7b5d2c;
   font-size: 12px;
+}
+
+.reschedule-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 14px 16px;
+  border: 1px solid #b9cdf0;
+  border-left: 4px solid #3268a6;
+  border-radius: 6px;
+  background: #f2f7ff;
+}
+
+.reschedule-banner > i {
+  margin-top: 2px;
+  color: #2b5a8f;
+}
+
+.reschedule-banner > div {
+  display: grid;
+  gap: 4px;
+}
+
+.reschedule-banner span {
+  color: #3f5878;
+  font-size: 12px;
+}
+
+.task-cell {
+  display: grid;
+  gap: 3px;
+}
+
+.basis-note {
+  color: #667188;
+  font-size: 11px;
 }
 
 .status-cell {

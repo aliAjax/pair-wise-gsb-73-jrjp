@@ -26,6 +26,12 @@ const topRisks = computed(() =>
 
 const componentName = (id: string): string =>
   store.data.components.find((component) => component.id === id)?.name ?? id
+
+const issueTarget = (kind: string): string => {
+  if (kind === 'mitigation_conflict') return '/mitigations'
+  if (kind === 'dependency_vendor_pending' || kind === 'flow_invalidated') return '/architecture'
+  return '/risks'
+}
 </script>
 
 <template>
@@ -80,10 +86,7 @@ const componentName = (id: string): string =>
               <strong>{{ issue.title }}</strong>
               <p>{{ issue.detail }}</p>
             </div>
-            <RouterLink
-              :to="issue.kind === 'mitigation_conflict' ? '/mitigations' : '/risks'"
-              class="row-link"
-            >
+            <RouterLink :to="issueTarget(issue.kind)" class="row-link">
               处理
             </RouterLink>
           </article>

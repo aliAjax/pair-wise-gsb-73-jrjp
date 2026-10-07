@@ -103,6 +103,35 @@ export const getValidationIssues = (state: ThreatModelState): ValidationIssue[] 
       })
     })
 
+  state.dependencies
+    .filter((dependency) => dependency.vendorStatus === 'pending')
+    .forEach((dependency) => {
+      issues.push({
+        id: `vendor-pending-${dependency.id}`,
+        kind: 'dependency_vendor_pending',
+        severity:
+          dependency.dataClass === 'restricted' || dependency.dataClass === 'confidential'
+            ? 'high'
+            : 'medium',
+        title: `${dependency.name} 供应商状态待核`,
+        detail: '该依赖缺少供应商确认状态（可能来自旧数据），补齐前关联威胁不能批准会签。',
+        entityId: dependency.id,
+      })
+    })
+
+  state.flows
+    .filter((flow) => flow.status === 'invalid')
+    .forEach((flow) => {
+      issues.push({
+        id: `flow-invalid-${flow.id}`,
+        kind: 'flow_invalidated',
+        severity: 'high',
+        title: `${flow.name} 已失效待重算`,
+        detail: flow.statusNote ?? '关联外部依赖状态变更导致数据流失效。',
+        entityId: flow.id,
+      })
+    })
+
   const taskGroups = new Map<string, typeof state.mitigations>()
   state.mitigations.forEach((task) => {
     if (!task.conflictGroup) return

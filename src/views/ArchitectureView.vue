@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
@@ -19,11 +19,17 @@ import StatusTag from '@/components/StatusTag.vue'
 import type {
   ArchitectureComponent,
   DataFlow,
+  DependencyStatus,
+  DependencyTransitionConflict,
   ExternalDependency,
   SystemBoundary,
   TrustZone,
 } from '@/models/domain'
 import { createId } from '@/services/repository'
+import {
+  computeDependencyTransition,
+  DEPENDENCY_STATUS_LABELS,
+} from '@/services/disposalChain'
 import { useThreatModelStore } from '@/stores/threatModel'
 
 const store = useThreatModelStore()
@@ -34,6 +40,7 @@ const boundaryVisible = ref(false)
 const componentVisible = ref(false)
 const flowVisible = ref(false)
 const dependencyVisible = ref(false)
+const transitionVisible = ref(false)
 
 const boundaryForm = reactive<SystemBoundary>({ ...store.data.boundary })
 const componentForm = reactive<ArchitectureComponent>({
@@ -54,6 +61,7 @@ const flowForm = reactive<DataFlow>({
   dataClass: 'internal',
   crossesTrustBoundary: true,
   description: '',
+  status: 'active',
 })
 const dependencyForm = reactive<ExternalDependency>({
   id: '',
@@ -63,7 +71,13 @@ const dependencyForm = reactive<ExternalDependency>({
   dataClass: 'internal',
   owner: '',
   status: 'active',
+  vendorStatus: 'pending',
 })
+
+const transitionDependency = ref<ExternalDependency | null>(null)
+const transitionTarget = ref<DependencyStatus>('active')
+const transitionBaseStatus = ref<DependencyStatus>('active')
+const transitionConflictMessage = ref('')
 
 const componentTypes = [
   { label: '业务服务', value: 'service' },
@@ -84,6 +98,20 @@ const dataClasses = [
   { label: '机密', value: 'confidential' },
   { label: '受限', value: 'restricted' },
 ]
+const vendorStatuses = [
+  { label: '已确认', value: 'confirmed' },
+  { label: '待核', value: 'pending' },
+]
+
+const transitionPreview = computed(() => {
+  if (!transitionDependency.value) return null
+  return computeDependencyTransition(
+    store.data,
+    transitionDependency.value.id,
+    transitionTarget.value,
+    { batchId: 'preview', actor: '', now: '' },
+  )
+})
 
 const resetComponentForm = (item?: ArchitectureComponent): void => {
   Object.assign(
@@ -113,6 +141,10 @@ const resetFlowForm = (item?: DataFlow): void => {
       dataClass: 'internal',
       crossesTrustBoundary: true,
       description: '',
+      externalDependencyId: undefined,
+      status: 'active' as const,
+      statusNote: undefined,
+      invalidatedByDependencyId: undefined,
     },
   )
   flowVisible.value = true
@@ -129,6 +161,7 @@ const resetDependencyForm = (item?: ExternalDependency): void => {
       dataClass: 'internal',
       owner: '',
       status: 'active',
+      vendorStatus: 'pending',
     },
   )
   dependencyVisible.value = true
@@ -166,7 +199,11 @@ const saveFlow = (): void => {
     toast.add({ severity: 'error', summary: '校验失败', detail: '源组件与目标组件不能相同', life: 3000 })
     return
   }
-  store.saveEntity('flows', { ...flowForm, id: flowForm.id || createId('flow') })
+  store.saveEntity('flows', {
+    ...flowForm,
+    id: flowForm.id || createId('flow'),
+    externalDependencyId: flowForm.externalDependencyId || undefined,
+  })
   flowVisible.value = false
   toast.add({ severity: 'success', summary: '数据流已保存', detail: flowForm.name, life: 2500 })
 }
@@ -176,12 +213,75 @@ const saveDependency = (): void => {
     toast.add({ severity: 'error', summary: '校验失败', detail: '依赖、供应商和负责人不能为空', life: 3000 })
     return
   }
+  const existing = store.data.dependencies.find((item) => item.id === dependencyForm.id)
   store.saveEntity('dependencies', {
     ...dependencyForm,
     id: dependencyForm.id || createId('dep'),
+    // 生命周期状态只允许通过停服/续期处置链变更，普通编辑保留当前状态
+    status: existing?.status ?? 'active',
   })
   dependencyVisible.value = false
   toast.add({ severity: 'success', summary: '外部依赖已保存', detail: dependencyForm.name, life: 2500 })
+}
+
+const openTransition = (dependency: ExternalDependency, target: DependencyStatus): void => {
+  transitionDependency.value = dependency
+  transitionTarget.value = target
+  transitionBaseStatus.value = dependency.status
+  transitionConflictMessage.value = ''
+  transitionVisible.value = true
+}
+
+const confirmTransition = (): void => {
+  const dependency = transitionDependency.value
+  if (!dependency) return
+  const outcome = store.applyDependencyTransition(
+    dependency.id,
+    transitionTarget.value,
+    transitionBaseStatus.value,
+  )
+  if (outcome.ok) {
+    transitionVisible.value = false
+    toast.add({
+      severity: 'success',
+      summary: '处置链已联动',
+      detail: `${dependency.name} 已调整为「${DEPENDENCY_STATUS_LABELS[transitionTarget.value]}」，数据流、威胁结论与缓解任务已重算`,
+      life: 3500,
+    })
+    return
+  }
+  if (outcome.reason === 'conflict') {
+    transitionConflictMessage.value =
+      `另一窗口已先将该依赖调整为「${DEPENDENCY_STATUS_LABELS[outcome.conflict.currentStatus]}」，先到者生效。` +
+      `当前草稿「${DEPENDENCY_STATUS_LABELS[outcome.conflict.draftStatus]}」已保留到冲突列表，可在确认后重新提交。`
+    toast.add({ severity: 'warn', summary: '提交冲突', detail: '先到者已生效，草稿与冲突已保留', life: 4000 })
+    return
+  }
+  if (outcome.reason === 'write_failed') {
+    transitionVisible.value = false
+    toast.add({
+      severity: 'error',
+      summary: '写入失败',
+      detail: '已从完整批次回滚，批次已保留，可重放恢复',
+      life: 4000,
+    })
+    return
+  }
+  transitionVisible.value = false
+}
+
+const resubmitConflict = (conflict: DependencyTransitionConflict): void => {
+  const dependency = store.data.dependencies.find((item) => item.id === conflict.dependencyId)
+  store.dismissDependencyConflict(conflict.id)
+  if (dependency) openTransition(dependency, conflict.draftStatus)
+}
+
+const replayBatch = (): void => {
+  if (store.replayPendingBatch()) {
+    toast.add({ severity: 'success', summary: '批次已恢复', detail: '失败批次重放成功，审计未重复新增', life: 3000 })
+  } else {
+    toast.add({ severity: 'error', summary: '重放失败', detail: '写入仍然失败，完整批次继续保留', life: 3500 })
+  }
 }
 
 const componentName = (id: string): string =>
@@ -201,6 +301,58 @@ const saveZone = (zone: TrustZone): void => {
       title="架构、边界与数据流"
       description="维护系统边界、信任区、资产组件、数据流和外部依赖，作为威胁分析的结构化输入。"
     />
+
+    <section v-if="store.pendingBatch" class="chain-banner batch-banner">
+      <i class="pi pi-replay"></i>
+      <div>
+        <strong>存在写入失败的处置批次</strong>
+        <span>
+          依赖状态变更为「{{ DEPENDENCY_STATUS_LABELS[store.pendingBatch.toStatus] }}」的完整批次未写入成功，
+          已从失败点回滚，可重放恢复；重放不会新增审计记录。
+        </span>
+      </div>
+      <div class="banner-actions">
+        <Button label="重放恢复" icon="pi pi-replay" size="small" @click="replayBatch" />
+        <Button
+          label="放弃批次"
+          size="small"
+          severity="secondary"
+          text
+          @click="store.discardPendingBatch()"
+        />
+      </div>
+    </section>
+
+    <section
+      v-for="conflict in store.dependencyConflicts"
+      :key="conflict.id"
+      class="chain-banner conflict-banner"
+    >
+      <i class="pi pi-exclamation-triangle"></i>
+      <div>
+        <strong>{{ conflict.dependencyName }} 的提交冲突</strong>
+        <span>
+          另一窗口已先提交为「{{ DEPENDENCY_STATUS_LABELS[conflict.currentStatus] }}」并生效；
+          本窗口草稿「{{ DEPENDENCY_STATUS_LABELS[conflict.draftStatus] }}」未覆盖先到结果。
+        </span>
+      </div>
+      <div class="banner-actions">
+        <Button
+          label="以草稿重新提交"
+          icon="pi pi-send"
+          size="small"
+          outlined
+          @click="resubmitConflict(conflict)"
+        />
+        <Button
+          label="放弃草稿"
+          size="small"
+          severity="secondary"
+          text
+          @click="store.dismissDependencyConflict(conflict.id)"
+        />
+      </div>
+    </section>
 
     <section class="boundary-strip">
       <div>
@@ -316,7 +468,14 @@ const saveZone = (zone: TrustZone): void => {
             <Button label="新增数据流" icon="pi pi-plus" @click="resetFlowForm()" />
           </div>
           <DataTable :value="store.data.flows" dataKey="id" size="small" stripedRows>
-            <Column field="name" header="数据流" />
+            <Column field="name" header="数据流">
+              <template #body="{ data }">
+                <div class="flow-name-cell">
+                  <span>{{ data.name }}</span>
+                  <small v-if="data.statusNote" class="flow-note">{{ data.statusNote }}</small>
+                </div>
+              </template>
+            </Column>
             <Column header="源 → 目标">
               <template #body="{ data }">
                 {{ componentName(data.sourceId) }} → {{ componentName(data.targetId) }}
@@ -327,6 +486,11 @@ const saveZone = (zone: TrustZone): void => {
             <Column header="跨信任区" style="width: 100px">
               <template #body="{ data }">
                 <StatusTag :value="data.crossesTrustBoundary ? 'high' : 'low'" />
+              </template>
+            </Column>
+            <Column header="状态" style="width: 100px">
+              <template #body="{ data }">
+                <StatusTag :value="data.status" kind="status" />
               </template>
             </Column>
             <Column header="操作" style="width: 150px">
@@ -359,28 +523,62 @@ const saveZone = (zone: TrustZone): void => {
             <Column field="purpose" header="用途" />
             <Column field="dataClass" header="数据级别" style="width: 110px" />
             <Column field="owner" header="负责人" style="width: 140px" />
-            <Column header="状态" style="width: 120px">
+            <Column header="状态" style="width: 105px">
               <template #body="{ data }">
                 <StatusTag :value="data.status" />
               </template>
             </Column>
-            <Column header="操作" style="width: 150px">
+            <Column header="供应商状态" style="width: 110px">
               <template #body="{ data }">
-                <Button
-                  icon="pi pi-pencil"
-                  label="编辑"
-                  size="small"
-                  text
-                  @click="resetDependencyForm(data)"
-                />
-                <Button
-                  icon="pi pi-trash"
-                  size="small"
-                  severity="danger"
-                  text
-                  aria-label="删除依赖"
-                  @click="store.removeEntity('dependencies', data.id)"
-                />
+                <StatusTag :value="data.vendorStatus" />
+              </template>
+            </Column>
+            <Column header="操作" style="width: 300px">
+              <template #body="{ data }">
+                <div class="action-stack">
+                  <Button
+                    v-if="data.status !== 'retired'"
+                    icon="pi pi-power-off"
+                    label="停服"
+                    size="small"
+                    severity="danger"
+                    text
+                    @click="openTransition(data, 'retired')"
+                  />
+                  <Button
+                    v-if="data.status === 'review_due'"
+                    icon="pi pi-refresh"
+                    label="续期"
+                    size="small"
+                    severity="success"
+                    text
+                    @click="openTransition(data, 'active')"
+                  />
+                  <Button
+                    v-if="data.status === 'retired'"
+                    icon="pi pi-undo"
+                    label="恢复"
+                    size="small"
+                    severity="success"
+                    text
+                    @click="openTransition(data, 'active')"
+                  />
+                  <Button
+                    icon="pi pi-pencil"
+                    label="编辑"
+                    size="small"
+                    text
+                    @click="resetDependencyForm(data)"
+                  />
+                  <Button
+                    icon="pi pi-trash"
+                    size="small"
+                    severity="danger"
+                    text
+                    aria-label="删除依赖"
+                    @click="store.removeEntity('dependencies', data.id)"
+                  />
+                </div>
               </template>
             </Column>
           </DataTable>
@@ -507,6 +705,17 @@ const saveZone = (zone: TrustZone): void => {
             option-value="value"
           />
         </div>
+        <div class="field">
+          <label>关联外部依赖</label>
+          <Select
+            v-model="flowForm.externalDependencyId"
+            :options="store.data.dependencies"
+            option-label="name"
+            option-value="id"
+            placeholder="不关联"
+            show-clear
+          />
+        </div>
         <div class="field field-wide">
           <label>说明</label>
           <Textarea v-model="flowForm.description" rows="3" />
@@ -546,6 +755,16 @@ const saveZone = (zone: TrustZone): void => {
           <label>负责人</label>
           <InputText v-model="dependencyForm.owner" />
         </div>
+        <div class="field">
+          <label>供应商状态</label>
+          <Select
+            v-model="dependencyForm.vendorStatus"
+            :options="vendorStatuses"
+            option-label="label"
+            option-value="value"
+          />
+          <small class="muted">待核状态下，关联威胁不能批准会签。</small>
+        </div>
         <div class="field field-wide">
           <label>用途</label>
           <Textarea v-model="dependencyForm.purpose" rows="3" />
@@ -554,6 +773,44 @@ const saveZone = (zone: TrustZone): void => {
       <template #footer>
         <Button label="取消" severity="secondary" outlined @click="dependencyVisible = false" />
         <Button label="保存依赖" icon="pi pi-check" @click="saveDependency" />
+      </template>
+    </Dialog>
+
+    <Dialog
+      v-model:visible="transitionVisible"
+      :header="`${transitionDependency?.name ?? ''}：${DEPENDENCY_STATUS_LABELS[transitionTarget]}确认`"
+      modal
+      :style="{ width: '640px' }"
+    >
+      <div v-if="transitionDependency" class="transition-body">
+        <p class="transition-lead">
+          依赖状态将由「{{ DEPENDENCY_STATUS_LABELS[transitionBaseStatus] }}」调整为「{{
+            DEPENDENCY_STATUS_LABELS[transitionTarget]
+          }}」，提交后处置链立即联动：
+        </p>
+        <ul class="transition-effects">
+          <li>
+            数据流：{{ transitionPreview?.flows.length ?? 0 }} 条{{
+              transitionTarget === 'retired' ? '立即失效并重算' : '重算恢复'
+            }}
+          </li>
+          <li>威胁结论：{{ transitionPreview?.threats.length ?? 0 }} 条回到会签流程重新确认</li>
+          <li>缓解任务：{{ transitionPreview?.mitigations.length ?? 0 }} 条未开始任务回到待重排</li>
+          <li>已完成任务保留原完成依据，不受本次变更影响</li>
+        </ul>
+        <p v-if="transitionConflictMessage" class="transition-conflict">
+          <i class="pi pi-exclamation-triangle"></i>
+          {{ transitionConflictMessage }}
+        </p>
+      </div>
+      <template #footer>
+        <Button label="取消" severity="secondary" outlined @click="transitionVisible = false" />
+        <Button
+          :label="`确认${DEPENDENCY_STATUS_LABELS[transitionTarget]}`"
+          icon="pi pi-check"
+          :severity="transitionTarget === 'retired' ? 'danger' : 'success'"
+          @click="confirmTransition"
+        />
       </template>
     </Dialog>
   </div>
@@ -570,6 +827,115 @@ const saveZone = (zone: TrustZone): void => {
   border-left: 4px solid #426f9e;
   border-radius: 6px;
   background: #fff;
+}
+
+.chain-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 14px 16px;
+  border-radius: 6px;
+}
+
+.chain-banner > i {
+  margin-top: 2px;
+}
+
+.chain-banner > div:nth-child(2) {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+}
+
+.chain-banner span {
+  font-size: 12px;
+}
+
+.batch-banner {
+  border: 1px solid #f2c78f;
+  border-left: 4px solid #d97706;
+  background: #fffaf0;
+}
+
+.batch-banner > i {
+  color: #b45309;
+}
+
+.batch-banner span {
+  color: #7b5d2c;
+}
+
+.conflict-banner {
+  border: 1px solid #f1b7b0;
+  border-left: 4px solid #c64b39;
+  background: #fff6f5;
+}
+
+.conflict-banner > i {
+  color: #b33627;
+}
+
+.conflict-banner span {
+  color: #8a4238;
+}
+
+.banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.flow-name-cell {
+  display: grid;
+  gap: 3px;
+}
+
+.flow-note {
+  color: #a05a00;
+  font-size: 11px;
+}
+
+.transition-body {
+  display: grid;
+  gap: 14px;
+}
+
+.transition-lead {
+  margin: 0;
+  color: #414d61;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.transition-effects {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px 12px 30px;
+  border: 1px solid #e2e6ec;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #4c586d;
+  font-size: 12px;
+}
+
+.transition-conflict {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #f1b7b0;
+  border-radius: 6px;
+  background: #fff6f5;
+  color: #8a4238;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.transition-conflict i {
+  margin-top: 1px;
 }
 
 .boundary-strip > div {

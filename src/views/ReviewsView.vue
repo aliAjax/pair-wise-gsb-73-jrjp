@@ -60,6 +60,11 @@ const currentDecisions = computed(() =>
       )
     : [],
 )
+const pendingVendorDependencies = computed(() =>
+  (selectedThreat.value?.externalDependencyIds ?? [])
+    .map((id) => store.data.dependencies.find((item) => item.id === id))
+    .filter((item) => item && item.vendorStatus === 'pending'),
+)
 
 const statusForRole = (threat: Threat, role: ActorRole): DecisionType | 'pending' =>
   decisionsForThreat(store.data.decisions, threat.id, threat.revision).find(
@@ -85,13 +90,22 @@ const submitDecision = (): void => {
     toast.add({ severity: 'error', summary: '校验失败', detail: '会签意见不能为空', life: 3000 })
     return
   }
-  store.submitDecision(
+  const result = store.submitDecision(
     selectedThreat.value.id,
     form.role,
     form.decision,
     form.actor,
     form.comment,
   )
+  if (!result.ok) {
+    toast.add({
+      severity: 'error',
+      summary: '会签被拦截',
+      detail: result.error ?? '当前状态不允许批准会签',
+      life: 4000,
+    })
+    return
+  }
   decisionVisible.value = false
   toast.add({ severity: 'success', summary: '会签意见已提交', detail: '审核状态已重新计算', life: 2500 })
 }
@@ -169,6 +183,13 @@ const decisionLabel = (decision: DecisionType | 'pending'): string =>
             <StatusTag :value="selectedThreat.reviewStatus" kind="review" />
           </div>
           <p class="decision-description">{{ selectedThreat.description }}</p>
+          <div v-if="pendingVendorDependencies.length > 0" class="vendor-pending-warning">
+            <i class="pi pi-exclamation-circle"></i>
+            <span>
+              关联依赖 {{ pendingVendorDependencies.map((item) => item?.name).join('、') }}
+              的供应商状态仍待核，补齐前不能批准会签。
+            </span>
+          </div>
           <Button label="提交会签意见" icon="pi pi-pencil" @click="openDecision" />
 
           <section class="decision-history">
@@ -343,6 +364,25 @@ const decisionLabel = (decision: DecisionType | 'pending'): string =>
   color: #59657a;
   font-size: 13px;
   line-height: 1.65;
+}
+
+.vendor-pending-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: -6px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #f2c78f;
+  border-radius: 6px;
+  background: #fffaf0;
+  color: #8a5a1d;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.vendor-pending-warning i {
+  margin-top: 1px;
+  color: #b45309;
 }
 
 .decision-history {
